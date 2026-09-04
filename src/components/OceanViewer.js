@@ -146,10 +146,18 @@ export class OceanViewer {
     // 1. Earth Sphere with High-Resolution Scientific Texture
     const earthGeo = new THREE.SphereGeometry(this.globeRadius, 64, 64);
     const earthTexture = createScientificEarthTexture();
+    
+    // Specular mask: oceans reflect directional light, continents remain matte
+    const textureLoader = new THREE.TextureLoader();
+    const specularMap = textureLoader.load("/assets/textures/earth_specular_2048.jpg");
+    const normalMap = textureLoader.load("/assets/textures/earth_normal_2048.jpg");
+
     this.earthMat = new THREE.MeshStandardMaterial({
       map: earthTexture,
-      roughness: 0.82,
-      metalness: 0.18,
+      roughness: 0.88,
+      metalness: 0.05,
+      normalMap: normalMap,
+      normalScale: new THREE.Vector2(0.20, 0.20),
       transparent: true,
       opacity: 1.0
     });
