@@ -187,35 +187,40 @@ export class OceanViewer {
     this.globeGroup.visible = true;
   }
 
-  createGlobeBoxOutline(bounds, color = 0x38bdf8, radiusMultiplier = 1.005) {
+  createGlobeBoxOutline(bounds, color = 0x38bdf8, radiusMultiplier = 1.002) {
     const { minLat, maxLat, minLon, maxLon } = bounds;
     const points = [];
-    const steps = 16;
+    const steps = 32;
     const r = this.globeRadius * radiusMultiplier;
 
-    // Top edge
+    // Top edge (North)
     for (let i = 0; i <= steps; i++) {
       const lon = minLon + (i / steps) * (maxLon - minLon);
       points.push(this.latLonToGlobePoint(maxLat, lon, r));
     }
-    // Right edge
+    // Right edge (East)
     for (let i = 0; i <= steps; i++) {
       const lat = maxLat - (i / steps) * (maxLat - minLat);
       points.push(this.latLonToGlobePoint(lat, maxLon, r));
     }
-    // Bottom edge
+    // Bottom edge (South)
     for (let i = 0; i <= steps; i++) {
       const lon = maxLon - (i / steps) * (maxLon - minLon);
       points.push(this.latLonToGlobePoint(minLat, lon, r));
     }
-    // Left edge
+    // Left edge (West)
     for (let i = 0; i <= steps; i++) {
       const lat = minLat + (i / steps) * (maxLat - minLat);
       points.push(this.latLonToGlobePoint(lat, minLon, r));
     }
 
     const geo = new THREE.BufferGeometry().setFromPoints(points);
-    const mat = new THREE.LineBasicMaterial({ color, linewidth: 2.5 });
+    const mat = new THREE.LineBasicMaterial({
+      color,
+      linewidth: 1.8,
+      transparent: true,
+      opacity: 0.68
+    });
     return new THREE.Line(geo, mat);
   }
 
@@ -224,11 +229,11 @@ export class OceanViewer {
       this.globeSelectionGroup.remove(this.globeSelectionGroup.children[0]);
     }
 
-    // Outer neon boundary
-    const line = this.createGlobeBoxOutline(bounds, 0x00ffff, 1.008);
+    // Outer boundary line closely hugging sphere
+    const line = this.createGlobeBoxOutline(bounds, 0x00f0ff, 1.003);
     this.globeSelectionGroup.add(line);
 
-    // 4 Corner pulse markers
+    // 4 Corner precision registration ticks
     const corners = [
       [bounds.minLat, bounds.minLon],
       [bounds.minLat, bounds.maxLon],
@@ -237,8 +242,8 @@ export class OceanViewer {
     ];
 
     corners.forEach(([lat, lon]) => {
-      const pt = this.latLonToGlobePoint(lat, lon, this.globeRadius * 1.01);
-      const dotGeo = new THREE.SphereGeometry(0.8, 8, 8);
+      const pt = this.latLonToGlobePoint(lat, lon, this.globeRadius * 1.004);
+      const dotGeo = new THREE.SphereGeometry(0.45, 8, 8);
       const dotMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
       const dot = new THREE.Mesh(dotGeo, dotMat);
       dot.position.copy(pt);
@@ -837,42 +842,44 @@ export class OceanViewer {
     markerGroup.position.copy(pos);
     markerGroup.lookAt(0, 0, 0); // Orient towards Earth center
 
-    // Beacon Pin
-    const pinGeo = new THREE.CylinderGeometry(0.3, 0.1, 3.5, 8);
+    // 1. Slender oceanic surface anchor pin
+    const pinGeo = new THREE.CylinderGeometry(0.12, 0.08, 2.2, 8);
     pinGeo.rotateX(Math.PI / 2);
-    const pinMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    const pinMat = new THREE.MeshBasicMaterial({ color: 0x64748b });
     const pin = new THREE.Mesh(pinGeo, pinMat);
-    pin.position.z = 1.75;
+    pin.position.z = 1.1;
     markerGroup.add(pin);
 
-    // Glowing Sphere
-    const sphereGeo = new THREE.SphereGeometry(1.2, 12, 12);
+    // 2. Scientific Float Core (Yellow/Amber oceanic livery, matching real Argo buoys)
+    const sphereGeo = new THREE.SphereGeometry(0.75, 12, 12);
     const sphereMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.8
+      color: 0xf59e0b,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.45,
+      roughness: 0.35
     });
     const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-    sphere.position.z = 3.6;
+    sphere.position.z = 2.2;
     sphere.userData = { argoProfile: profile };
     markerGroup.add(sphere);
 
-    // Pulsing Radar Ring
-    const ringGeo = new THREE.RingGeometry(1.6, 2.3, 16);
+    // 3. Subtle Status Ring (Subordinate telemetry indicator)
+    const ringGeo = new THREE.RingGeometry(0.9, 1.35, 16);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x34d399,
+      color: 0x38bdf8,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.75
+      opacity: 0.55
     });
     const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.position.z = 3.6;
+    ring.position.z = 2.2;
     ring.name = "radarRing";
     markerGroup.add(ring);
 
-    // ID Tag Billboard
+    // 4. Subtle ID Tag Billboard
     const tag = this.createArgoBillboardTag(profile.id.replace("ARGO-", ""));
-    tag.position.z = 5.2;
+    tag.scale.set(4.8, 1.2, 1);
+    tag.position.z = 3.6;
     markerGroup.add(tag);
 
     return markerGroup;
