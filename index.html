@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OceanVis-3D — Scientific Ocean Model Validation & Data Assimilation Workspace</title>
+  <meta name="description" content="SIH 2026 Problem Statement SIH26067 - 3D Interactive Oceanographic Model Validation, Argo Observation Verification, and Localized EnOI Data Assimilation Workspace" />
+
+  <!-- Typography: Inter, Outfit, JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="/src/index.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- TOP BAR: Google Earth + Scientific Research Dashboard Aesthetic -->
+    <header class="app-header">
+      <div class="brand-section">
+        <div class="brand-logo">
+          <div class="brand-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 12c.6.5 1.2.8 2 .8s1.4-.3 2-.8c.6-.5 1.2-.8 2-.8s1.4.3 2 .8c.6.5 1.2.8 2 .8s1.4-.3 2-.8c.6-.5 1.2-.8 2-.8s1.4.3 2 .8"/>
+              <path d="M2 17c.6.5 1.2.8 2 .8s1.4-.3 2-.8c.6-.5 1.2-.8 2-.8s1.4.3 2 .8c.6.5 1.2.8 2 .8s1.4-.3 2-.8c.6-.5 1.2-.8 2-.8s1.4.3 2 .8"/>
+              <circle cx="12" cy="7" r="3"/>
+            </svg>
+          </div>
+          <div>
+            <div class="brand-title">OceanVis-3D</div>
+          </div>
+        </div>
+        <div class="brand-subtitle">
+          <span class="agency-tag">INCOIS / MoES</span>
+          <span class="domain-tag">BoB-01 • SIH26067</span>
+        </div>
+      </div>
+
+      <!-- CAMERA MODE TOGGLE (GLOBAL vs DEPTH) -->
+      <div class="camera-mode-switcher" id="camera-mode-group">
+        <button class="cam-mode-btn active" id="btn-cam-global" data-mode="global" title="Earth / Basin overview for regional navigation">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span>Global Basin</span>
+        </button>
+        <button class="cam-mode-btn" id="btn-cam-depth" data-mode="depth" title="3D Oblique perspective to inspect ocean depth layers & thermocline">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m19 12-7 7-7-7"/><path d="M12 19V5"/></svg>
+          <span>Depth 3D</span>
+        </button>
+      </div>
+
+      <!-- DEPTH 3D VIEW DIRECTION SWITCHER (Requirement 6: Rotate depth scene around volume) -->
+      <div class="depth-view-switcher" id="depth-view-switcher" style="display: none;">
+        <span class="depth-view-label">Angle:</span>
+        <button class="depth-dir-btn active" id="btn-view-front" data-dir="front" title="Front View (West-Facing Profile)">
+          <span>◀ View A</span>
+        </button>
+        <button class="depth-dir-btn" id="btn-view-back" data-dir="back" title="Back View (East-Facing Profile)">
+          <span>View B ▶</span>
+        </button>
+        <button class="depth-dir-btn" id="btn-view-oblique" data-dir="oblique" title="3D Diagonal Oblique View">
+          <span>⤾ Oblique</span>
+        </button>
+      </div>
+
+      <!-- ACTIVE VARIABLE BADGE & SYSTEM STATUS -->
+      <div class="header-center-info">
+        <div class="active-var-pill" id="header-var-pill">
+          <span class="var-dot"></span>
+          <span id="header-var-name">Sea Surface Temperature (SST)</span>
+          <span class="var-depth-val" id="header-depth-name">0m</span>
+        </div>
+        <div class="system-status-badge">
+          <span class="status-pulse-dot"></span>
+          <span>MOM6/HYCOM 1/12° • QC D-Mode</span>
+        </div>
+      </div>
+
+      <!-- HEADER ACTIONS -->
+      <div class="header-actions">
+        <button class="header-btn primary" id="btn-header-tour" title="Interactive 6-step walkthrough for presentation">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span>Guided Demo Tour</span>
+        </button>
+        <button class="header-btn" id="btn-header-reset" title="Reset view and data states">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          <span>Reset</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- WORKSPACE MAIN BODY -->
+    <main class="workspace-body">
+      <!-- LEFT CONTROL RAIL (COMPACT 64px RAIL + PROGRESSIVE FLYOUT PANELS) -->
+      <aside class="control-rail-wrapper" id="control-panel"></aside>
+
+      <!-- CENTER MAP & CANVAS VIEWPORT (DOMINATES 75-85% OF SCREEN) -->
+      <section class="viewport-container">
+        <div class="perspective-container" id="perspective-wrapper">
+          <div id="ocean-map"></div>
+        </div>
+
+        <!-- FLOATING DOMAIN BADGE -->
+        <div class="map-floating-overlay">
+          <div class="floating-domain-chip">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+            <span id="domain-label">Bay of Bengal (8°-22°N, 80°-95°E)</span>
+          </div>
+        </div>
+
+        <!-- SCIENTIFIC COLORBAR LEGEND -->
+        <div class="ocean-legend-card" id="legend-card">
+          <div class="legend-header">
+            <span id="legend-title">Potential Temperature (°C)</span>
+            <span class="legend-palette-tag" id="legend-palette-tag">TURBO</span>
+          </div>
+          <div class="legend-color-bar" id="legend-bar"></div>
+          <div class="legend-ticks">
+            <span id="legend-min">27.0 °C</span>
+            <span id="legend-mid">28.6 °C</span>
+            <span id="legend-max">30.2 °C</span>
+          </div>
+        </div>
+
+        <!-- INTERACTIVE PROBE TOOLTIP -->
+        <div class="ocean-probe-tooltip" id="probe-tooltip"></div>
+
+        <!-- GUIDED TOUR PROMPT BANNER -->
+        <div class="tour-banner" id="tour-banner" style="display: none;">
+          <div class="tour-banner-left">
+            <span class="tour-step-badge" id="tour-step-badge">Step 1 of 6</span>
+            <span class="tour-step-text" id="tour-step-text">Exploring Model Ocean Field</span>
+          </div>
+          <div class="tour-banner-actions">
+            <button class="tour-next-btn" id="tour-next-btn">
+              <span>Next</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button id="tour-close-btn" class="tour-close-btn" title="Exit Guided Tour">✕</button>
+          </div>
+        </div>
+
+        <!-- FLOATING DRAWER OPENER (VISIBLE WHEN DRAWER IS COLLAPSED) -->
+        <button class="drawer-peek-trigger" id="btn-open-analysis" title="Open Argo Profile & Assimilation Analysis Drawer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span class="drawer-peek-label">Argo Profile Analysis</span>
+          <span class="drawer-peek-badge" id="drawer-peek-status">Active</span>
+        </button>
+      </section>
+
+      <!-- RIGHT ANALYSIS & ASSIMILATION DRAWER (CONTEXTUAL SLIDE-OUT) -->
+      <aside class="analysis-drawer" id="profile-panel"></aside>
+    </main>
+
+    <!-- BOTTOM STATUS BAR -->
+    <footer class="status-bar" id="status-bar"></footer>
+
+    <!-- CYCLONE 3D VISUALIZATION MODAL (EXPLICIT SCIENTIFIC PLACEHOLDER) -->
+    <div class="modal-backdrop" id="cyclone-modal" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div class="modal-title-wrap">
+            <div class="modal-icon-cyclone">🌀</div>
+            <div>
+              <div class="modal-title">Cyclone 3D Atmosphere-Ocean Coupling</div>
+              <div class="modal-subtitle">Planned Module: Tropical Cyclone Wind Stress & Cold Wake Assimilation</div>
+            </div>
+          </div>
+          <button class="modal-close-btn" id="btn-close-cyclone-modal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-alert-box">
+            <div class="modal-alert-icon">ℹ️</div>
+            <div>
+              <strong>Scientific Module Status:</strong>
+              <div>Coupled Atmospheric-Oceanic Cyclone Boundary Layer & Storm Surge 3D Track Assimilation module is scheduled for the next deployment phase.</div>
+            </div>
+          </div>
+          <div class="modal-feature-list">
+            <div class="feature-item">
+              <span class="feature-bullet">●</span>
+              <div>
+                <strong>3D Vortex Wind Field Ingestion:</strong> WRF-COAWST atmospheric boundary layer surface wind vectors.
+              </div>
+            </div>
+            <div class="feature-item">
+              <span class="feature-bullet">●</span>
+              <div>
+                <strong>Cyclone Cold Wake Detection:</strong> Quantifying SST cooling (up to -3.5°C) caused by vertical shear mixing.
+              </div>
+            </div>
+            <div class="feature-item">
+              <span class="feature-bullet">●</span>
+              <div>
+                <strong>Real-time IMD Cyclone Tracks:</strong> Ingesting RSMC New Delhi tropical storm trajectories for Bay of Bengal.
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer-note">
+            Currently running active MOM6/HYCOM baseline with in-situ Argo profiling and localized EnOI assimilation.
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn-confirm" id="btn-dismiss-cyclone">Return to Ocean Analysis</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION -->
+    <div class="toast-notification" id="app-toast">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span id="toast-message">Application ready</span>
+    </div>
+  </div>
+
+  <!-- Application Entrypoint -->
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>
