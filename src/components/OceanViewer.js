@@ -649,14 +649,14 @@ export class OceanViewer {
     this.tracerGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     this.tracerGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
-    // Particle Appearance: extremely small, translucent, no bloom/additive glow
+    // Particle Appearance: small, clearly visible colored water tracers without bloom/glow
     this.tracerMat = new THREE.PointsMaterial({
-      size: 2.2,
+      size: 2.3,
       sizeAttenuation: true,
       map: this.createTracerTexture(),
       vertexColors: true,
       transparent: true,
-      opacity: 0.25, // Extremely subtle water tracer tint!
+      opacity: 0.55, // Solid, clearly visible scientific water tracer color!
       blending: THREE.NormalBlending, // Normal blending prevents glowing balls
       depthWrite: false
     });
@@ -671,11 +671,11 @@ export class OceanViewer {
     canvas.height = 32;
     const ctx = canvas.getContext("2d");
 
-    // Soft Gaussian-like circular alpha disc without a bright solid core
+    // Clean circular alpha disc with solid inner core and soft anti-aliased edge
     const rad = ctx.createRadialGradient(16, 16, 0, 16, 16, 15);
-    rad.addColorStop(0, "rgba(255, 255, 255, 0.65)");
-    rad.addColorStop(0.35, "rgba(255, 255, 255, 0.38)");
-    rad.addColorStop(0.75, "rgba(255, 255, 255, 0.10)");
+    rad.addColorStop(0, "rgba(255, 255, 255, 1.0)");
+    rad.addColorStop(0.55, "rgba(255, 255, 255, 0.88)");
+    rad.addColorStop(0.85, "rgba(255, 255, 255, 0.35)");
     rad.addColorStop(1.0, "rgba(255, 255, 255, 0)");
 
     ctx.fillStyle = rad;
@@ -1448,7 +1448,7 @@ export class OceanViewer {
     }
     if (rasterOpacity !== undefined && this.tracerMesh) {
       this.rasterOpacity = rasterOpacity;
-      this.tracerMesh.material.opacity = Math.min(0.5, rasterOpacity * 0.3);
+      this.tracerMesh.material.opacity = Math.max(0.2, Math.min(0.75, rasterOpacity * 0.65));
     }
   }
 
@@ -1546,8 +1546,8 @@ export class OceanViewer {
         this.bathymetryMesh.material.opacity = Math.min(1.0, progress * 1.1);
       }
       if (this.tracerMat) {
-        // Delicate particles fade in gently to standard 0.25 opacity
-        this.tracerMat.opacity = Math.min(0.25, progress * 0.25);
+        // Particles fade in to standard 0.55 opacity
+        this.tracerMat.opacity = Math.min(0.55, progress * 0.55);
       }
 
       // Hide Earth sphere as volume solidifies
@@ -1575,7 +1575,7 @@ export class OceanViewer {
       if (this.rulerGroup) this.rulerGroup.visible = true;
       if (this.slicePlane) this.slicePlane.visible = true;
       if (this.depthSurface) this.depthSurface.material.opacity = 0.28;
-      if (this.tracerMat) this.tracerMat.opacity = 0.25;
+      if (this.tracerMat) this.tracerMat.opacity = 0.55;
     } else {
       // Transition Complete: Lock into DEPTH_READY
       this.transitionState = "DEPTH_READY";
@@ -1590,7 +1590,7 @@ export class OceanViewer {
       if (this.rulerGroup) this.rulerGroup.visible = true;
       if (this.slicePlane) this.slicePlane.visible = true;
       if (this.depthSurface) this.depthSurface.material.opacity = 0.28;
-      if (this.tracerMat) this.tracerMat.opacity = 0.25;
+      if (this.tracerMat) this.tracerMat.opacity = 0.55;
       if (this.bathymetryMesh) this.bathymetryMesh.material.opacity = 1.0;
 
       this.spatialTransition = null;
