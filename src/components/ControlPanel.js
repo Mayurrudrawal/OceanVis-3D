@@ -149,6 +149,7 @@ export class ControlPanel {
                 <div class="var-card-meta">
                   <div class="var-card-title">Potential Temperature</div>
                   <div class="var-card-sub">Thermal Structure & Thermocline (°C)</div>
+                  <div class="var-gradient-indicator"></div>
                 </div>
                 <div class="var-card-unit">°C</div>
               </button>
@@ -158,6 +159,7 @@ export class ControlPanel {
                 <div class="var-card-meta">
                   <div class="var-card-title">Practical Salinity</div>
                   <div class="var-card-sub">Freshwater Plumes & Halocline (PSU)</div>
+                  <div class="var-gradient-indicator"></div>
                 </div>
                 <div class="var-card-unit">PSU</div>
               </button>
@@ -167,6 +169,7 @@ export class ControlPanel {
                 <div class="var-card-meta">
                   <div class="var-card-title">Current Velocity</div>
                   <div class="var-card-sub">EICC Coastal Jet & Mesoscale Gyres</div>
+                  <div class="var-gradient-indicator"></div>
                 </div>
                 <div class="var-card-unit">m/s</div>
               </button>
