@@ -2,6 +2,7 @@ import { OceanViewer } from "./components/OceanViewer.js";
 import { ControlPanel } from "./components/ControlPanel.js";
 import { ProfilePanel } from "./components/ProfilePanel.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { LandingPage } from "./components/LandingPage.js";
 import { ARGO_PROFILES, getArgoById } from "./data/argoData.js";
 import { TIMESTAMPS } from "./data/modelData.js";
 
@@ -14,6 +15,7 @@ class OceanVisApp {
 
     this.tourStep = 0;
     this.tourActive = false;
+    this.currentRoute = "landing"; // "landing" | "dashboard"
 
     this.init();
   }
@@ -141,7 +143,68 @@ class OceanVisApp {
     this.bindCameraSwitcher();
     this.bindCycloneModal();
 
+    // 5. Initialize Professional Landing Page
+    this.landingPage = new LandingPage({
+      onEnterDashboard: () => {
+        this.navigateTo("dashboard");
+      },
+      onLaunchTour: () => {
+        this.navigateTo("dashboard");
+        setTimeout(() => {
+          this.startGuidedTour();
+        }, 350);
+      }
+    });
+
+    // Handle initial URL route / hash
+    this.handleInitialRoute();
+
     console.log("OceanVis-3D Prototype Initialized successfully.");
+  }
+
+  handleInitialRoute() {
+    const hash = window.location.hash;
+    const path = window.location.pathname;
+
+    if (hash === "#dashboard" || path === "/dashboard") {
+      this.navigateTo("dashboard", false);
+    } else {
+      this.navigateTo("landing", false);
+    }
+
+    window.addEventListener("hashchange", () => {
+      if (window.location.hash === "#dashboard") {
+        this.navigateTo("dashboard", false);
+      } else if (window.location.hash === "" || window.location.hash === "#landing") {
+        this.navigateTo("landing", false);
+      }
+    });
+  }
+
+  navigateTo(route, updateHistory = true) {
+    this.currentRoute = route;
+    const appEl = document.getElementById("app");
+
+    if (route === "dashboard") {
+      if (this.landingPage) this.landingPage.hide();
+      if (appEl) appEl.classList.remove("landing-active");
+      if (updateHistory) {
+        window.location.hash = "dashboard";
+      }
+      // Ensure WebGL viewport adjusts correctly
+      setTimeout(() => {
+        if (this.viewer && this.viewer.onResize) {
+          this.viewer.onResize();
+        }
+      }, 50);
+      this.showToast("Entered OceanVis-3D Scientific Workspace.");
+    } else {
+      if (this.landingPage) this.landingPage.show();
+      if (appEl) appEl.classList.add("landing-active");
+      if (updateHistory) {
+        window.location.hash = "";
+      }
+    }
   }
 
   bindCameraSwitcher() {
@@ -216,6 +279,11 @@ class OceanVisApp {
   }
 
   bindHeaderActions() {
+    // Return to Landing Page
+    document.getElementById("btn-header-home")?.addEventListener("click", () => {
+      this.navigateTo("landing");
+    });
+
     // Reset App
     document.getElementById("btn-header-reset")?.addEventListener("click", () => {
       this.resetEntireApp();

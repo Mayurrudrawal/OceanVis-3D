@@ -238,12 +238,12 @@ export class ProfilePanel {
             title: {
               display: true,
               text: "Depth (m)",
-              color: "#334155",
+              color: "#94a3b8",
               font: { family: "'Inter', sans-serif", size: 11, weight: 600 }
             },
-            grid: { color: "#e2e8f0" },
+            grid: { color: "#1e293b" },
             ticks: {
-              color: "#475569",
+              color: "#94a3b8",
               font: { family: "'JetBrains Mono', monospace", size: 10 }
             }
           },
@@ -251,12 +251,12 @@ export class ProfilePanel {
             title: {
               display: true,
               text: `${varConfig.name} (${varConfig.unit})`,
-              color: "#334155",
+              color: "#94a3b8",
               font: { family: "'Inter', sans-serif", size: 11, weight: 600 }
             },
-            grid: { color: "#e2e8f0" },
+            grid: { color: "#1e293b" },
             ticks: {
-              color: "#475569",
+              color: "#94a3b8",
               font: { family: "'JetBrains Mono', monospace", size: 10 }
             }
           }
