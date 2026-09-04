@@ -1,7 +1,14 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { getModelScalar, VARIABLES, DEPTH_LEVELS } from "../data/modelData.js";
-import { getColor } from "../utils/colormaps.js";
+import {
+  getModelScalar,
+  sampleTemperature,
+  sampleSalinity,
+  sampleCurrent,
+  VARIABLES,
+  DEPTH_LEVELS
+} from "../data/modelData.js";
+import { getColor, sampleColormapDirect } from "../utils/colormaps.js";
 import { createScientificEarthTexture } from "../utils/earthTexture.js";
 
 export class OceanViewer {
@@ -9,6 +16,8 @@ export class OceanViewer {
     this.container = document.getElementById(containerId);
     this.onSelectArgo = options.onSelectArgo || (() => {});
     this.onHoverCoord = options.onHoverCoord || (() => {});
+    this.onRegionSelected = options.onRegionSelected || (() => {});
+    this.onEnterDepthRequested = options.onEnterDepthRequested || (() => {});
 
     this.variable = "temperature";
     this.depth = 0;
@@ -17,11 +26,31 @@ export class OceanViewer {
     this.currentCameraMode = "global"; // "global" | "depth"
     this.depthViewDir = "front"; // "front" | "back" | "oblique"
 
+    // Active geographic bounding box (drives both selection highlight and Depth View volume)
+    this.activeBounds = {
+      minLat: 7.5,
+      maxLat: 22.5,
+      minLon: 79.5,
+      maxLon: 95.5
+    };
+
+    // Earth rotation to face Bay of Bengal directly at front camera view
+    this.globeRotationY = Math.PI - 0.035;
+
     this.showModelRaster = true;
     this.showStreamlines = true;
     this.showArgoMarkers = true;
     this.showBathymetry = true;
     this.rasterOpacity = 0.85;
+
+    // Dimensions of Depth View volume
+    this.dimX = 90;
+    this.dimZ = 76;
+    this.dimY = 36; // 0m (surface) to -36 (2000m abyssal floor)
+
+    // State Machine for Spatial Transition: 'IDLE_GLOBAL' | 'APPROACHING_REGION' | 'SURFACE_APPROACH' | 'VOLUME_REVEAL' | 'UNDERWATER_DESCENT' | 'DEPTH_READY' | 'RETURNING_TO_GLOBAL'
+    this.transitionState = "IDLE_GLOBAL";
+    this.spatialTransition = null;
 
     // Assimilation pulse 3D state
     this.assimilationPulse = null;
@@ -36,7 +65,7 @@ export class OceanViewer {
     this.initThree();
     this.buildGlobeScene();
     this.buildDepthScene();
-    this.initVelocityParticles();
+    this.initTracerParticles();
     this.initEvents();
     this.startRenderLoop();
 
@@ -84,16 +113,21 @@ export class OceanViewer {
     this.controls.target.set(0, 0, 0);
 
     // Lighting (Scientific dark studio lighting)
-    const ambientLight = new THREE.AmbientLight(0xdbeafe, 1.2);
-    this.scene.add(ambientLight);
+    this.ambientLight = new THREE.AmbientLight(0xdbeafe, 1.2);
+    this.scene.add(this.ambientLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.4);
-    dirLight1.position.set(150, 200, 150);
-    this.scene.add(dirLight1);
+    this.dirLight1 = new THREE.DirectionalLight(0xffffff, 1.4);
+    this.dirLight1.position.set(150, 200, 150);
+    this.scene.add(this.dirLight1);
 
-    const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.8);
-    dirLight2.position.set(-150, -50, -150);
-    this.scene.add(dirLight2);
+    this.dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.8);
+    this.dirLight2.position.set(-150, -50, -150);
+    this.scene.add(this.dirLight2);
+
+    // Underwater Optical Attenuation Fog (P0-2)
+    // Deep marine blue-black fog calibrated to oceanic optical extinction
+    this.underwaterFog = new THREE.FogExp2(0x040c1a, 0.0062);
+    this.scene.fog = null; // Clean crisp vacuum for Global Basin mode
 
     // Raycaster for mouse picking
     this.raycaster = new THREE.Raycaster();
@@ -101,7 +135,7 @@ export class OceanViewer {
   }
 
   // =========================================================================
-  // 2. MODE 1: GLOBAL BASIN (3D EARTH GLOBE)
+  // 2. MODE 1: GLOBAL BASIN (3D EARTH GLOBE WITH BAY OF BENGAL ACCURACY)
   // =========================================================================
   buildGlobeScene() {
     this.globeGroup = new THREE.Group();
@@ -112,14 +146,16 @@ export class OceanViewer {
     // 1. Earth Sphere with High-Resolution Scientific Texture
     const earthGeo = new THREE.SphereGeometry(this.globeRadius, 64, 64);
     const earthTexture = createScientificEarthTexture();
-    const earthMat = new THREE.MeshStandardMaterial({
+    this.earthMat = new THREE.MeshStandardMaterial({
       map: earthTexture,
-      roughness: 0.85,
-      metalness: 0.15
+      roughness: 0.82,
+      metalness: 0.18,
+      transparent: true,
+      opacity: 1.0
     });
-    this.earthMesh = new THREE.Mesh(earthGeo, earthMat);
-    // Align Bay of Bengal towards front camera view
-    this.earthMesh.rotation.y = -Math.PI / 2 + 0.1;
+    this.earthMesh = new THREE.Mesh(earthGeo, this.earthMat);
+    // Align Bay of Bengal directly at front view
+    this.earthMesh.rotation.y = this.globeRotationY;
     this.globeGroup.add(this.earthMesh);
 
     // 2. Atmospheric Outer Halo Glow
@@ -127,7 +163,7 @@ export class OceanViewer {
     const atmosMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.12,
+      opacity: 0.14,
       side: THREE.BackSide,
       blending: THREE.AdditiveBlending
     });
@@ -135,8 +171,13 @@ export class OceanViewer {
     this.globeGroup.add(this.atmosMesh);
 
     // 3. Indian Ocean / Bay of Bengal Domain Highlight Line in 3D
-    this.globeDomainOutline = this.createGlobeDomainOutline();
+    this.globeDomainOutline = this.createGlobeBoxOutline(this.activeBounds, 0x38bdf8, 1.004);
     this.globeGroup.add(this.globeDomainOutline);
+
+    // 4. Dynamic Selection Box Group on Globe
+    this.globeSelectionGroup = new THREE.Group();
+    this.globeGroup.add(this.globeSelectionGroup);
+    this.updateGlobeSelectionBox(this.activeBounds);
 
     // Group for 3D Argo markers on globe
     this.globeArgoGroup = new THREE.Group();
@@ -146,36 +187,63 @@ export class OceanViewer {
     this.globeGroup.visible = true;
   }
 
-  createGlobeDomainOutline() {
-    // 7.5°N - 22.5°N, 79.5°E - 95.5°E
-    const minLat = 7.5, maxLat = 22.5, minLon = 79.5, maxLon = 95.5;
+  createGlobeBoxOutline(bounds, color = 0x38bdf8, radiusMultiplier = 1.005) {
+    const { minLat, maxLat, minLon, maxLon } = bounds;
     const points = [];
     const steps = 16;
+    const r = this.globeRadius * radiusMultiplier;
 
     // Top edge
     for (let i = 0; i <= steps; i++) {
       const lon = minLon + (i / steps) * (maxLon - minLon);
-      points.push(this.latLonToGlobePoint(maxLat, lon, this.globeRadius * 1.004));
+      points.push(this.latLonToGlobePoint(maxLat, lon, r));
     }
     // Right edge
     for (let i = 0; i <= steps; i++) {
       const lat = maxLat - (i / steps) * (maxLat - minLat);
-      points.push(this.latLonToGlobePoint(lat, maxLon, this.globeRadius * 1.004));
+      points.push(this.latLonToGlobePoint(lat, maxLon, r));
     }
     // Bottom edge
     for (let i = 0; i <= steps; i++) {
       const lon = maxLon - (i / steps) * (maxLon - minLon);
-      points.push(this.latLonToGlobePoint(minLat, lon, this.globeRadius * 1.004));
+      points.push(this.latLonToGlobePoint(minLat, lon, r));
     }
     // Left edge
     for (let i = 0; i <= steps; i++) {
       const lat = minLat + (i / steps) * (maxLat - minLat);
-      points.push(this.latLonToGlobePoint(lat, minLon, this.globeRadius * 1.004));
+      points.push(this.latLonToGlobePoint(lat, minLon, r));
     }
 
     const geo = new THREE.BufferGeometry().setFromPoints(points);
-    const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 });
+    const mat = new THREE.LineBasicMaterial({ color, linewidth: 2.5 });
     return new THREE.Line(geo, mat);
+  }
+
+  updateGlobeSelectionBox(bounds) {
+    while (this.globeSelectionGroup.children.length) {
+      this.globeSelectionGroup.remove(this.globeSelectionGroup.children[0]);
+    }
+
+    // Outer neon boundary
+    const line = this.createGlobeBoxOutline(bounds, 0x00ffff, 1.008);
+    this.globeSelectionGroup.add(line);
+
+    // 4 Corner pulse markers
+    const corners = [
+      [bounds.minLat, bounds.minLon],
+      [bounds.minLat, bounds.maxLon],
+      [bounds.maxLat, bounds.minLon],
+      [bounds.maxLat, bounds.maxLon]
+    ];
+
+    corners.forEach(([lat, lon]) => {
+      const pt = this.latLonToGlobePoint(lat, lon, this.globeRadius * 1.01);
+      const dotGeo = new THREE.SphereGeometry(0.8, 8, 8);
+      const dotMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+      const dot = new THREE.Mesh(dotGeo, dotMat);
+      dot.position.copy(pt);
+      this.globeSelectionGroup.add(dot);
+    });
   }
 
   latLonToGlobePoint(lat, lon, radius = this.globeRadius) {
@@ -186,11 +254,31 @@ export class OceanViewer {
     const z = radius * Math.sin(phi) * Math.sin(theta);
     const y = radius * Math.cos(phi);
 
-    // Apply same rotation as earthMesh
-    const rotY = -Math.PI / 2 + 0.1;
+    // Rotate sphere around Y axis so Bay of Bengal faces camera
+    const rotY = this.globeRotationY;
     const cosR = Math.cos(rotY);
     const sinR = Math.sin(rotY);
     return new THREE.Vector3(x * cosR + z * sinR, y, -x * sinR + z * cosR);
+  }
+
+  globePointToLatLon(point) {
+    const rotY = -this.globeRotationY;
+    const cosR = Math.cos(rotY);
+    const sinR = Math.sin(rotY);
+    const px = point.x * cosR + point.z * sinR;
+    const py = point.y;
+    const pz = -point.x * sinR + point.z * cosR;
+
+    const rNorm = Math.sqrt(px * px + py * py + pz * pz) || 1;
+    const phi = Math.acos(Math.max(-1, Math.min(1, py / rNorm)));
+    const lat = 90 - (phi * 180) / Math.PI;
+
+    const theta = Math.atan2(pz, -px);
+    let lon = (theta * 180) / Math.PI - 180;
+    while (lon < -180) lon += 360;
+    while (lon > 180) lon -= 360;
+
+    return { lat, lon };
   }
 
   // =========================================================================
@@ -200,35 +288,8 @@ export class OceanViewer {
     this.depthGroup = new THREE.Group();
     this.scene.add(this.depthGroup);
 
-    // Coordinate space for Bay of Bengal Basin:
-    // Longitude: 79.5°E to 95.5°E (mapped to X: -45 to +45)
-    // Latitude:  7.5°N to 22.5°N  (mapped to Z: +38 to -38)
-    // Depth:     0m to 2000m      (mapped to Y: 0 to -36)
-    this.dimX = 90;
-    this.dimZ = 76;
-    this.dimY = 36; // 0 at surface, -36 at 2000m
-
-    // 1. Translucent Ocean Surface (0m)
-    const surfGeo = new THREE.PlaneGeometry(this.dimX, this.dimZ, 24, 24);
-    surfGeo.rotateX(-Math.PI / 2);
-    const surfMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0369a1,
-      transparent: true,
-      opacity: 0.35,
-      roughness: 0.1,
-      transmission: 0.5,
-      wireframe: false
-    });
-    this.depthSurface = new THREE.Mesh(surfGeo, surfMat);
-    this.depthSurface.position.set(0, 0, 0);
-    this.depthGroup.add(this.depthSurface);
-
-    // Surface Grid Wireframe
-    const surfWire = new THREE.LineSegments(
-      new THREE.WireframeGeometry(surfGeo),
-      new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.18 })
-    );
-    this.depthSurface.add(surfWire);
+    // 1. Procedural Ocean Surface with Wave Movement
+    this.buildOceanSurface();
 
     // 2. 3D Bathymetry Seabed Floor (Continental shelves & Abyssal plain)
     this.buildBathymetryFloor();
@@ -242,10 +303,7 @@ export class OceanViewer {
     // 5. Multi-layer Depth Slice Indicator
     this.buildDepthSliceIndicator();
 
-    // 6. 3D Volumetric Scalar Particles (Temperature / Salinity field)
-    this.buildVolumetricParticles();
-
-    // 7. Group for 3D Argo float objects in depth volume
+    // 6. Group for 3D Argo float objects in depth volume
     this.depthArgoGroup = new THREE.Group();
     this.depthGroup.add(this.depthArgoGroup);
 
@@ -253,17 +311,63 @@ export class OceanViewer {
     this.depthGroup.visible = false;
   }
 
+  buildOceanSurface() {
+    const segs = 48;
+    const surfGeo = new THREE.PlaneGeometry(this.dimX, this.dimZ, segs, segs);
+    surfGeo.rotateX(-Math.PI / 2);
+
+    // Store base vertex positions for wave displacement
+    this.surfBasePositions = new Float32Array(surfGeo.attributes.position.array);
+
+    // Physically believable translucent ocean surface
+    const surfMat = new THREE.MeshPhysicalMaterial({
+      color: 0x075985,
+      transparent: true,
+      opacity: 0.28,
+      roughness: 0.14,
+      transmission: 0.65,
+      reflectivity: 0.45,
+      wireframe: false
+    });
+    this.depthSurface = new THREE.Mesh(surfGeo, surfMat);
+    this.depthSurface.position.set(0, 0, 0);
+    this.depthGroup.add(this.depthSurface);
+
+    // Subtle Surface Grid Wireframe
+    const surfWire = new THREE.LineSegments(
+      new THREE.WireframeGeometry(surfGeo),
+      new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.12 })
+    );
+    this.depthSurface.add(surfWire);
+  }
+
+  updateOceanSurfaceWaves(time) {
+    if (!this.depthSurface || !this.surfBasePositions) return;
+    const pos = this.depthSurface.geometry.attributes.position;
+    const count = pos.count;
+    const t = time * 0.0011;
+
+    for (let i = 0; i < count; i++) {
+      const bx = this.surfBasePositions[i * 3];
+      const bz = this.surfBasePositions[i * 3 + 2];
+      // Multi-harmonic gentle Gerstner-like sinusoids
+      const w1 = Math.sin(bx * 0.08 + t * 1.5) * Math.cos(bz * 0.07 + t * 1.2) * 0.38;
+      const w2 = Math.sin(bx * 0.16 - bz * 0.13 + t * 2.1) * 0.18;
+      const w3 = Math.cos(bx * 0.04 + bz * 0.05 - t * 0.7) * 0.22;
+      pos.setY(i, w1 + w2 + w3);
+    }
+    pos.needsUpdate = true;
+  }
+
   // Maps (lat, lon, depth) to 3D Cartesian coordinates (X, Y, Z) in Depth Mode
   geoToDepth3D(lat, lon, depthMeters = 0) {
-    // lon: 79.5° to 95.5° -> X: -45 to +45
-    const normX = (lon - 79.5) / 16.0;
+    const b = this.activeBounds;
+    const normX = (lon - b.minLon) / (b.maxLon - b.minLon || 1);
     const x = (normX - 0.5) * this.dimX;
 
-    // lat: 7.5° to 22.5° -> Z: +38 (South) to -38 (North)
-    const normZ = (lat - 7.5) / 15.0;
+    const normZ = (lat - b.minLat) / (b.maxLat - b.minLat || 1);
     const z = (0.5 - normZ) * this.dimZ;
 
-    // depth: 0 to 2000m -> Y: 0 to -36
     const normY = Math.min(2000, Math.max(0, depthMeters)) / 2000.0;
     const y = -normY * this.dimY;
 
@@ -272,19 +376,24 @@ export class OceanViewer {
 
   // Reverse mapping from (x, z) on ocean surface to (lat, lon)
   depth3DToGeo(x, z) {
+    const b = this.activeBounds;
     const normX = x / this.dimX + 0.5;
-    const lon = 79.5 + normX * 16.0;
+    const lon = b.minLon + normX * (b.maxLon - b.minLon);
 
     const normZ = 0.5 - z / this.dimZ;
-    const lat = 7.5 + normZ * 15.0;
+    const lat = b.minLat + normZ * (b.maxLat - b.minLat);
 
     return {
-      lat: Math.max(7.5, Math.min(22.5, lat)),
-      lon: Math.max(79.5, Math.min(95.5, lon))
+      lat: Math.max(b.minLat, Math.min(b.maxLat, lat)),
+      lon: Math.max(b.minLon, Math.min(b.maxLon, lon))
     };
   }
 
   buildBathymetryFloor() {
+    if (this.bathymetryMesh) {
+      this.depthGroup.remove(this.bathymetryMesh);
+    }
+
     const segsX = 32;
     const segsZ = 32;
     const floorGeo = new THREE.PlaneGeometry(this.dimX, this.dimZ, segsX, segsZ);
@@ -331,7 +440,11 @@ export class OceanViewer {
   }
 
   buildBoundingCage() {
-    // 3D Glass bounding box with graduated corner scales
+    if (this.boundingCageGroup) {
+      this.depthGroup.remove(this.boundingCageGroup);
+    }
+
+    this.boundingCageGroup = new THREE.Group();
     const h = this.dimY;
     const boxGeo = new THREE.BoxGeometry(this.dimX, h, this.dimZ);
     const boxWire = new THREE.LineSegments(
@@ -339,13 +452,16 @@ export class OceanViewer {
       new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.45, linewidth: 1.5 })
     );
     boxWire.position.set(0, -h / 2, 0);
-    this.depthGroup.add(boxWire);
+    this.boundingCageGroup.add(boxWire);
 
-    // Directional axis tags (N, S, E, W) on the surface frame
-    this.createSurfaceLabel("NORTH (22.5°N)", 0, -this.dimZ / 2 - 4);
-    this.createSurfaceLabel("SOUTH (7.5°N)", 0, this.dimZ / 2 + 4);
-    this.createSurfaceLabel("WEST (79.5°E)", -this.dimX / 2 - 4, 0);
-    this.createSurfaceLabel("EAST (95.5°E)", this.dimX / 2 + 4, 0);
+    // Directional axis tags on the surface frame showing active bounds
+    const b = this.activeBounds;
+    this.createSurfaceLabel(`NORTH (${b.maxLat.toFixed(1)}°N)`, 0, -this.dimZ / 2 - 4);
+    this.createSurfaceLabel(`SOUTH (${b.minLat.toFixed(1)}°N)`, 0, this.dimZ / 2 + 4);
+    this.createSurfaceLabel(`WEST (${b.minLon.toFixed(1)}°E)`, -this.dimX / 2 - 4, 0);
+    this.createSurfaceLabel(`EAST (${b.maxLon.toFixed(1)}°E)`, this.dimX / 2 + 4, 0);
+
+    this.depthGroup.add(this.boundingCageGroup);
   }
 
   createSurfaceLabel(text, x, z) {
@@ -364,12 +480,15 @@ export class OceanViewer {
     const sprite = new THREE.Sprite(spriteMat);
     sprite.scale.set(16, 4, 1);
     sprite.position.set(x, 1.2, z);
-    this.depthGroup.add(sprite);
+    this.boundingCageGroup.add(sprite);
   }
 
   buildDepthAxis() {
-    // Vertical Scientific Depth Ruler positioned along Western edge
-    const rulerGroup = new THREE.Group();
+    if (this.rulerGroup) {
+      this.depthGroup.remove(this.rulerGroup);
+    }
+
+    this.rulerGroup = new THREE.Group();
     const rulerX = -this.dimX / 2 - 3;
     const rulerZ = -this.dimZ / 2;
 
@@ -378,7 +497,7 @@ export class OceanViewer {
     const rodMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.8, roughness: 0.2 });
     const rod = new THREE.Mesh(rodGeo, rodMat);
     rod.position.set(rulerX, -this.dimY / 2, rulerZ);
-    rulerGroup.add(rod);
+    this.rulerGroup.add(rod);
 
     // Depth Tick marks & Billboard labels: 0m, 100m, 500m, 1000m, 2000m
     const ticks = [
@@ -396,7 +515,7 @@ export class OceanViewer {
       const tickGeo = new THREE.BoxGeometry(4, 0.4, 0.4);
       const tickMesh = new THREE.Mesh(tickGeo, rodMat);
       tickMesh.position.set(rulerX - 2, y, rulerZ);
-      rulerGroup.add(tickMesh);
+      this.rulerGroup.add(tickMesh);
 
       // High-contrast Billboard Depth Label
       const canvas = document.createElement("canvas");
@@ -420,14 +539,17 @@ export class OceanViewer {
       const sprite = new THREE.Sprite(spriteMat);
       sprite.scale.set(16, 3.2, 1);
       sprite.position.set(rulerX - 11, y, rulerZ);
-      rulerGroup.add(sprite);
+      this.rulerGroup.add(sprite);
     });
 
-    this.depthGroup.add(rulerGroup);
+    this.depthGroup.add(this.rulerGroup);
   }
 
   buildDepthSliceIndicator() {
-    // Highlighting plane for the currently active depth slice (e.g. 0m, 100m, 500m...)
+    if (this.slicePlane) {
+      this.depthGroup.remove(this.slicePlane);
+    }
+
     const sliceGeo = new THREE.PlaneGeometry(this.dimX, this.dimZ);
     sliceGeo.rotateX(-Math.PI / 2);
 
@@ -457,203 +579,219 @@ export class OceanViewer {
   }
 
   // =========================================================================
-  // 4. 3D VOLUMETRIC SCALAR FIELD (TEMPERATURE / SALINITY PARTICLES)
+  // 4. SCIENTIFIC SUBTLE WATER TRACER PARTICLES (REQUIREMENTS 1-8, 14)
   // =========================================================================
-  buildVolumetricParticles() {
-    // High-performance 3D Point Cloud representing the volumetric water column
-    const nx = 30;
-    const nz = 26;
-    const ny = 8; // 8 discrete depths
-    const totalPoints = nx * nz * ny;
+  initTracerParticles() {
+    // 5,500 subtle translucent water tracers carrying faint temperature/salinity tints
+    this.numTracers = 5500;
+    this.tracerGeo = new THREE.BufferGeometry();
+    const positions = new Float32Array(this.numTracers * 3);
+    const colors = new Float32Array(this.numTracers * 3);
+    this.tracerTargetColors = new Float32Array(this.numTracers * 3);
+    this.tracerData = [];
 
-    this.volumeGeo = new THREE.BufferGeometry();
-    const positions = new Float32Array(totalPoints * 3);
-    const colors = new Float32Array(totalPoints * 3);
-    this.volumePointData = []; // Store metadata for scalar lookups
+    const b = this.activeBounds;
+    for (let i = 0; i < this.numTracers; i++) {
+      // Natural 3D distribution: concentrated in dynamic upper 600m while covering entire 2000m column
+      const depthBias = Math.pow(Math.random(), 1.35);
+      const depth = depthBias * 2000;
+      const lat = b.minLat + Math.random() * (b.maxLat - b.minLat);
+      const lon = b.minLon + Math.random() * (b.maxLon - b.minLon);
 
-    let idx = 0;
-    for (let iy = 0; iy < ny; iy++) {
-      const depthVal = DEPTH_LEVELS[iy];
-      const y = -(depthVal / 2000.0) * this.dimY;
-
-      for (let iz = 0; iz < nz; iz++) {
-        const normZ = iz / (nz - 1);
-        const z = (0.5 - normZ) * this.dimZ;
-        const lat = 7.5 + (1 - normZ) * 15.0;
-
-        for (let ix = 0; ix < nx; ix++) {
-          const normX = ix / (nx - 1);
-          const x = (normX - 0.5) * this.dimX;
-          const lon = 79.5 + normX * 16.0;
-
-          positions[idx * 3] = x;
-          positions[idx * 3 + 1] = y;
-          positions[idx * 3 + 2] = z;
-
-          // Placeholder color
-          colors[idx * 3] = 0.2;
-          colors[idx * 3 + 1] = 0.6;
-          colors[idx * 3 + 2] = 0.9;
-
-          this.volumePointData.push({ lat, lon, depth: depthVal });
-          idx++;
-        }
-      }
-    }
-
-    this.volumeGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.volumeGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-
-    // Crisp circular sprite texture
-    const pTexture = this.createParticleTexture();
-
-    const pMat = new THREE.PointsMaterial({
-      size: 4.2,
-      map: pTexture,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.72,
-      depthWrite: false,
-      blending: THREE.NormalBlending
-    });
-
-    this.volumePoints = new THREE.Points(this.volumeGeo, pMat);
-    this.depthGroup.add(this.volumePoints);
-
-    // Initial color calculation
-    this.updateVolumetricColors();
-  }
-
-  createParticleTexture() {
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext("2d");
-
-    const rad = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
-    rad.addColorStop(0, "rgba(255, 255, 255, 1)");
-    rad.addColorStop(0.4, "rgba(255, 255, 255, 0.85)");
-    rad.addColorStop(0.85, "rgba(255, 255, 255, 0.15)");
-    rad.addColorStop(1, "rgba(255, 255, 255, 0)");
-
-    ctx.fillStyle = rad;
-    ctx.fillRect(0, 0, 64, 64);
-
-    return new THREE.CanvasTexture(canvas);
-  }
-
-  updateVolumetricColors() {
-    if (!this.volumeGeo || !this.volumePointData) return;
-    const colors = this.volumeGeo.attributes.color.array;
-    const varConfig = VARIABLES[this.variable];
-    const vMin = varConfig.min;
-    const vMax = varConfig.max;
-    const vRange = vMax - vMin || 1;
-
-    for (let i = 0; i < this.volumePointData.length; i++) {
-      const pt = this.volumePointData[i];
-      const val = getModelScalar(pt.lat, pt.lon, pt.depth, this.variable, this.timeIndex);
-      const norm = (val - vMin) / vRange;
-      const [r, g, b] = getColor(norm, varConfig.palette);
-
-      colors[i * 3] = r / 255;
-      colors[i * 3 + 1] = g / 255;
-      colors[i * 3 + 2] = b / 255;
-    }
-
-    this.volumeGeo.attributes.color.needsUpdate = true;
-  }
-
-  // =========================================================================
-  // 5. 3D CURRENT VELOCITY STREAMLINE PARTICLES
-  // =========================================================================
-  initVelocityParticles() {
-    this.numFlowParticles = 280;
-    this.flowGeo = new THREE.BufferGeometry();
-    const positions = new Float32Array(this.numFlowParticles * 3);
-    const colors = new Float32Array(this.numFlowParticles * 3);
-
-    this.flowParticleData = [];
-
-    for (let i = 0; i < this.numFlowParticles; i++) {
       const p = {
-        lat: 8.5 + Math.random() * 13.0,
-        lon: 80.5 + Math.random() * 14.0,
-        depth: Math.random() > 0.6 ? 50 : 0,
-        speed: 0.04 + Math.random() * 0.04,
-        age: Math.floor(Math.random() * 100),
-        maxAge: 80 + Math.floor(Math.random() * 60)
+        lat,
+        lon,
+        depth,
+        age: Math.floor(Math.random() * 260),
+        maxAge: 220 + Math.floor(Math.random() * 240)
       };
-      this.flowParticleData.push(p);
+      this.tracerData.push(p);
 
       const pt3d = this.geoToDepth3D(p.lat, p.lon, p.depth);
       positions[i * 3] = pt3d.x;
-      positions[i * 3 + 1] = pt3d.y + 0.5;
+      positions[i * 3 + 1] = pt3d.y;
       positions[i * 3 + 2] = pt3d.z;
 
-      colors[i * 3] = 0.22;
-      colors[i * 3 + 1] = 0.74;
-      colors[i * 3 + 2] = 0.97;
+      // Sample initial scalar field
+      let norm;
+      if (this.variable === "temperature") {
+        const val = sampleTemperature(p.lat, p.lon, p.depth, this.timeIndex);
+        norm = (val - 4.0) / (30.5 - 4.0);
+        sampleColormapDirect(norm, "turbo", colors, i * 3);
+      } else if (this.variable === "salinity") {
+        const val = sampleSalinity(p.lat, p.lon, p.depth, this.timeIndex);
+        norm = (val - 30.0) / (36.5 - 30.0);
+        sampleColormapDirect(norm, "haline", colors, i * 3);
+      } else {
+        const cur = sampleCurrent(p.lat, p.lon, p.depth, this.timeIndex);
+        norm = cur.speed / 1.25;
+        sampleColormapDirect(norm, "speed", colors, i * 3);
+      }
+
+      this.tracerTargetColors[i * 3] = colors[i * 3];
+      this.tracerTargetColors[i * 3 + 1] = colors[i * 3 + 1];
+      this.tracerTargetColors[i * 3 + 2] = colors[i * 3 + 2];
     }
 
-    this.flowGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.flowGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    this.tracerGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    this.tracerGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
-    const pMat = new THREE.PointsMaterial({
-      size: 5.5,
-      map: this.createParticleTexture(),
+    // Particle Appearance: extremely small, translucent, no bloom/additive glow
+    this.tracerMat = new THREE.PointsMaterial({
+      size: 2.2,
+      sizeAttenuation: true,
+      map: this.createTracerTexture(),
       vertexColors: true,
       transparent: true,
-      opacity: 0.85,
-      blending: THREE.AdditiveBlending,
+      opacity: 0.25, // Extremely subtle water tracer tint!
+      blending: THREE.NormalBlending, // Normal blending prevents glowing balls
       depthWrite: false
     });
 
-    this.flowMesh = new THREE.Points(this.flowGeo, pMat);
-    this.depthGroup.add(this.flowMesh);
+    this.tracerMesh = new THREE.Points(this.tracerGeo, this.tracerMat);
+    this.depthGroup.add(this.tracerMesh);
   }
 
-  updateVelocityParticles() {
-    if (!this.flowGeo || !this.flowParticleData) return;
-    const pos = this.flowGeo.attributes.position.array;
+  createTracerTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 32;
+    const ctx = canvas.getContext("2d");
 
-    for (let i = 0; i < this.flowParticleData.length; i++) {
-      const p = this.flowParticleData[i];
+    // Soft Gaussian-like circular alpha disc without a bright solid core
+    const rad = ctx.createRadialGradient(16, 16, 0, 16, 16, 15);
+    rad.addColorStop(0, "rgba(255, 255, 255, 0.65)");
+    rad.addColorStop(0.35, "rgba(255, 255, 255, 0.38)");
+    rad.addColorStop(0.75, "rgba(255, 255, 255, 0.10)");
+    rad.addColorStop(1.0, "rgba(255, 255, 255, 0)");
 
-      // Physics vector flow in Bay of Bengal:
-      // Cyclonic/anticyclonic gyre circulation + EICC coastal boundary current
-      const dLat = p.lat - 15.0;
-      const dLon = p.lon - 88.0;
-      const angle = Math.atan2(dLat, dLon) + Math.PI / 2;
+    ctx.fillStyle = rad;
+    ctx.fillRect(0, 0, 32, 32);
 
-      let u = Math.cos(angle) * p.speed;
-      let v = Math.sin(angle) * p.speed;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
+    return texture;
+  }
 
-      // Strong northward western boundary current (East India Coastal Current)
-      if (p.lon < 84.5 && p.lat > 11.0 && p.lat < 19.0) {
-        v += 0.05;
-        u -= 0.01;
-      }
+  updateTracerParticles() {
+    if (!this.tracerGeo || !this.tracerData) return;
+    const pos = this.tracerGeo.attributes.position.array;
+    const col = this.tracerGeo.attributes.color.array;
+    const targetCol = this.tracerTargetColors;
+    const b = this.activeBounds;
+    const palette = this.variable === "salinity" ? "haline" : (this.variable === "velocity" ? "speed" : "turbo");
 
-      p.lat += v * 0.5;
-      p.lon += u * 0.5;
+    // Color transition interpolation speed (Requirement 5 & 8: smooth lerp across gradients)
+    const colorLerp = 0.08;
+    const timeIndex = this.timeIndex;
+
+    for (let i = 0; i < this.numTracers; i++) {
+      const p = this.tracerData[i];
       p.age++;
 
-      // Respawn when out of bounds or expired
-      if (p.age >= p.maxAge || p.lat < 7.5 || p.lat > 22.5 || p.lon < 79.5 || p.lon > 95.5) {
-        p.lat = 8.5 + Math.random() * 13.0;
-        p.lon = 80.5 + Math.random() * 14.0;
+      // 1. Current field controls motion: (u, v, w) = sampleCurrent(position)
+      const cur = sampleCurrent(p.lat, p.lon, p.depth, timeIndex);
+      p.lon += cur.u * 0.045;
+      p.lat += cur.v * 0.045;
+      p.depth -= cur.w * 20.0;
+
+      // 2. Natural Upstream Boundary Recycling (avoids global resets)
+      if (
+        p.age >= p.maxAge ||
+        p.lat < b.minLat || p.lat > b.maxLat ||
+        p.lon < b.minLon || p.lon > b.maxLon ||
+        p.depth < 0 || p.depth > 2000
+      ) {
         p.age = 0;
-        p.maxAge = 70 + Math.floor(Math.random() * 60);
+        p.maxAge = 220 + Math.floor(Math.random() * 240);
+
+        // Recycle predominantly upstream (southern basin inflow & coastal boundary source)
+        const roll = Math.random();
+        if (roll < 0.60) {
+          // Southern upstream boundary
+          p.lat = b.minLat + Math.random() * 1.5;
+          p.lon = b.minLon + Math.random() * (b.maxLon - b.minLon);
+          p.depth = Math.pow(Math.random(), 1.3) * 1800;
+        } else if (roll < 0.85) {
+          // Western margin coastal current inflow
+          p.lat = b.minLat + Math.random() * (b.maxLat - b.minLat) * 0.7;
+          p.lon = b.minLon + Math.random() * 2.0;
+          p.depth = Math.pow(Math.random(), 1.2) * 1400;
+        } else {
+          // Interior convective zone
+          p.lat = b.minLat + 1.5 + Math.random() * (b.maxLat - b.minLat - 3.0);
+          p.lon = b.minLon + 1.5 + Math.random() * (b.maxLon - b.minLon - 3.0);
+          p.depth = 40 + Math.random() * 600;
+        }
       }
 
+      // 3. Update 3D Cartesian Position in volume
       const pt3d = this.geoToDepth3D(p.lat, p.lon, p.depth);
-      pos[i * 3] = pt3d.x;
-      pos[i * 3 + 1] = pt3d.y + 0.6;
-      pos[i * 3 + 2] = pt3d.z;
+      const idx3 = i * 3;
+      pos[idx3] = pt3d.x;
+      pos[idx3 + 1] = pt3d.y;
+      pos[idx3 + 2] = pt3d.z;
+
+      // 4. Sample local scalar field at particle's current physical position
+      let norm;
+      if (this.variable === "temperature") {
+        const tVal = sampleTemperature(p.lat, p.lon, p.depth, timeIndex);
+        norm = (tVal - 4.0) / (30.5 - 4.0);
+      } else if (this.variable === "salinity") {
+        const sVal = sampleSalinity(p.lat, p.lon, p.depth, timeIndex);
+        norm = (sVal - 30.0) / (36.5 - 30.0);
+      } else {
+        norm = cur.speed / 1.25;
+      }
+
+      // 5. Dynamic color update: sample colormap & smoothly lerp tint
+      sampleColormapDirect(norm, palette, targetCol, idx3);
+      col[idx3] += (targetCol[idx3] - col[idx3]) * colorLerp;
+      col[idx3 + 1] += (targetCol[idx3 + 1] - col[idx3 + 1]) * colorLerp;
+      col[idx3 + 2] += (targetCol[idx3 + 2] - col[idx3 + 2]) * colorLerp;
     }
 
-    this.flowGeo.attributes.position.needsUpdate = true;
+    this.tracerGeo.attributes.position.needsUpdate = true;
+    this.tracerGeo.attributes.color.needsUpdate = true;
+  }
+
+  // =========================================================================
+  // 6. REGION SELECTION & DYNAMIC EXTENT (REQUIREMENTS 10, 11, 12)
+  // =========================================================================
+  setRegionBounds(bounds) {
+    this.activeBounds = {
+      minLat: Math.max(5.0, Math.min(25.0, bounds.minLat)),
+      maxLat: Math.max(5.0, Math.min(25.0, bounds.maxLat)),
+      minLon: Math.max(75.0, Math.min(100.0, bounds.minLon)),
+      maxLon: Math.max(75.0, Math.min(100.0, bounds.maxLon))
+    };
+
+    // Update 3D selection box on Earth globe
+    this.updateGlobeSelectionBox(this.activeBounds);
+
+    // Rebuild Depth scene structures to align with new geographic bounds
+    this.buildBathymetryFloor();
+    this.buildBoundingCage();
+
+    // Re-position Argo floats in new coordinate system
+    this.argo3DObjects.forEach(item => {
+      const newPos = this.geoToDepth3D(item.profile.latitude, item.profile.longitude, 0);
+      item.depthObj.position.copy(newPos);
+    });
+
+    // Notify listeners
+    this.onRegionSelected(this.activeBounds);
+  }
+
+  enterDepthViewWithBounds(bounds) {
+    if (bounds) {
+      this.setRegionBounds(bounds);
+    }
+
+    // Set camera mode to Depth
+    this.setCameraMode("depth");
+    this.onEnterDepthRequested(this.activeBounds);
   }
 
   // =========================================================================
@@ -898,30 +1036,163 @@ export class OceanViewer {
   }
 
   // =========================================================================
-  // 7. CAMERA SYSTEM & DUAL MODES (GLOBAL vs DEPTH)
+  // 7. CAMERA SYSTEM & DUAL MODES (GLOBAL vs DEPTH WITH SPATIAL TRANSITION)
   // =========================================================================
-  setCameraMode(mode) {
-    this.currentCameraMode = mode;
+  setCameraMode(mode, options = {}) {
+    if (mode === this.currentCameraMode && !options.force) return mode === "depth";
+
+    // If already in a transition, clean up previous tween
+    if (this.spatialTransition) {
+      this.spatialTransition = null;
+    }
 
     if (mode === "depth") {
-      this.globeGroup.visible = false;
-      this.depthGroup.visible = true;
-
-      // Position camera at perspective angle looking into the ocean column
-      this.setDepthViewDirection(this.depthViewDir || "front");
+      this.initiateGlobalToDepthTransition(options);
     } else {
-      this.globeGroup.visible = true;
-      this.depthGroup.visible = false;
-
-      // Reset camera to Global Basin overview
-      this.animateCameraTo(
-        new THREE.Vector3(0, 35, 175),
-        new THREE.Vector3(0, 0, 0),
-        1000
-      );
+      this.initiateDepthToGlobalTransition(options);
     }
 
     return mode === "depth";
+  }
+
+  // P0-1: State Machine Transition (Global Basin -> Selected Region -> Depth 3D Volume)
+  initiateGlobalToDepthTransition(options = {}) {
+    this.currentCameraMode = "depth";
+    this.transitionState = "APPROACHING_REGION";
+
+    // Calculate central geographic coordinate of currently selected domain
+    const b = this.activeBounds;
+    const centerLat = (b.minLat + b.maxLat) / 2;
+    const centerLon = (b.minLon + b.maxLon) / 2;
+
+    // Both visual groups participate in the spatial transition
+    this.globeGroup.visible = true;
+    this.depthGroup.visible = true;
+
+    // Ensure Globe starts at full opacity
+    if (this.earthMat) {
+      this.earthMat.transparent = true;
+      this.earthMat.opacity = 1.0;
+    }
+    if (this.atmosMesh) this.atmosMesh.visible = true;
+
+    // Depth volume begins compressed flat at sea level (Y = 0) with zero initial opacity
+    this.depthGroup.position.set(0, 0, 0);
+    this.depthGroup.scale.set(1.0, 0.001, 1.0);
+
+    // Initial opacity states for depth volume components
+    if (this.depthSurface) {
+      this.depthSurface.material.transparent = true;
+      this.depthSurface.material.opacity = 0.05;
+    }
+    if (this.bathymetryMesh) {
+      this.bathymetryMesh.material.transparent = true;
+      this.bathymetryMesh.material.opacity = 0.0;
+    }
+    if (this.tracerMat) {
+      this.tracerMat.opacity = 0.0;
+    }
+    if (this.rulerGroup) this.rulerGroup.visible = false;
+    if (this.slicePlane) this.slicePlane.visible = false;
+
+    // Transition Waypoint 1: High-altitude orbit facing selected region
+    const gTarget = this.latLonToGlobePoint(centerLat, centerLon, this.globeRadius);
+    const approachCamPos = gTarget.clone().normalize().multiplyScalar(this.globeRadius * 1.75);
+    approachCamPos.y += 12;
+
+    // Transition Waypoint 2: Low-altitude surface approach over selected basin
+    const surfaceCamPos = gTarget.clone().normalize().multiplyScalar(this.globeRadius * 1.15);
+    surfaceCamPos.y += 5;
+
+    // Transition Waypoint 3: Depth 3D final perspective vantage
+    const finalCamPos = this.getDepthViewCamPos(this.depthViewDir || "front");
+    const finalTarget = new THREE.Vector3(0, -15, 0);
+
+    const now = performance.now();
+    this.spatialTransition = {
+      state: "APPROACHING_REGION",
+      startTime: now,
+      gTarget,
+      approachCamPos,
+      surfaceCamPos,
+      finalCamPos,
+      finalTarget,
+      startCamPos: this.camera.position.clone(),
+      startLookAt: this.controls.target.clone()
+    };
+  }
+
+  // P0-1 Reverse Transition: Smoothly ascend from Depth volume back to Earth Globe
+  initiateDepthToGlobalTransition(options = {}) {
+    this.currentCameraMode = "global";
+    this.transitionState = "RETURNING_TO_GLOBAL";
+
+    // Deactivate underwater fog immediately as we ascend back to space
+    this.setUnderwaterOpticalAttenuation(false);
+
+    // Fade in Earth sphere and restore full geometry
+    this.globeGroup.visible = true;
+    if (this.atmosMesh) this.atmosMesh.visible = true;
+
+    const globalCamPos = new THREE.Vector3(0, 35, 175);
+    const globalTarget = new THREE.Vector3(0, 0, 0);
+
+    const now = performance.now();
+    this.spatialTransition = {
+      state: "RETURNING_TO_GLOBAL",
+      startTime: now,
+      duration: 1100,
+      startCamPos: this.camera.position.clone(),
+      startLookAt: this.controls.target.clone(),
+      endCamPos: globalCamPos,
+      endLookAt: globalTarget
+    };
+  }
+
+  getDepthViewCamPos(dir = "front") {
+    if (dir === "back") {
+      return new THREE.Vector3(0, 26, -115);
+    } else if (dir === "oblique") {
+      return new THREE.Vector3(80, 42, 80);
+    } else if (dir === "top") {
+      return new THREE.Vector3(0, 125, 0.1);
+    } else {
+      return new THREE.Vector3(0, 26, 115);
+    }
+  }
+
+  // P0-2: Professional Underwater Optical Attenuation Control
+  setUnderwaterOpticalAttenuation(enabled = true) {
+    if (enabled) {
+      // Enable underwater exponential fog (Beer-Lambert attenuation)
+      this.scene.fog = this.underwaterFog;
+      this.scene.background.setHex(0x030814); // Deep marine blue-black void
+
+      // Surface sunlight downwelling attenuation
+      if (this.ambientLight) this.ambientLight.intensity = 0.95;
+      if (this.dirLight1) {
+        this.dirLight1.intensity = 1.35;
+        this.dirLight1.color.setHex(0xe0f2fe);
+      }
+      if (this.dirLight2) {
+        this.dirLight2.intensity = 0.65;
+        this.dirLight2.color.setHex(0x0284c7);
+      }
+    } else {
+      // Clean, unattenuated vacuum of space for Earth Globe
+      this.scene.fog = null;
+      this.scene.background.setHex(0x050811);
+
+      if (this.ambientLight) this.ambientLight.intensity = 1.2;
+      if (this.dirLight1) {
+        this.dirLight1.intensity = 1.4;
+        this.dirLight1.color.setHex(0xffffff);
+      }
+      if (this.dirLight2) {
+        this.dirLight2.intensity = 0.8;
+        this.dirLight2.color.setHex(0x38bdf8);
+      }
+    }
   }
 
   toggle3D() {
@@ -944,22 +1215,7 @@ export class OceanViewer {
   setDepthViewDirection(dir = "front") {
     this.depthViewDir = dir;
     const target = new THREE.Vector3(0, -15, 0);
-    let camPos;
-
-    if (dir === "back") {
-      // Back view (looking from East towards West)
-      camPos = new THREE.Vector3(0, 26, -115);
-    } else if (dir === "oblique") {
-      // 3D diagonal oblique angle
-      camPos = new THREE.Vector3(80, 42, 80);
-    } else if (dir === "top") {
-      // Top down nadir angle
-      camPos = new THREE.Vector3(0, 125, 0.1);
-    } else {
-      // Front view (looking from West/South towards North-East)
-      camPos = new THREE.Vector3(0, 26, 115);
-    }
-
+    const camPos = this.getDepthViewCamPos(dir);
     this.animateCameraTo(camPos, target, 850);
   }
 
@@ -1106,6 +1362,8 @@ export class OceanViewer {
     this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
     this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    // 1. Check Argo Floats Selection
     const activeArgoGroup = this.currentCameraMode === "depth" ? this.depthArgoGroup : this.globeArgoGroup;
     const intersects = this.raycaster.intersectObjects(activeArgoGroup.children, true);
 
@@ -1119,7 +1377,29 @@ export class OceanViewer {
         this.selectArgo(profile.id);
         this.focusOnArgo(profile.id);
         this.onSelectArgo(profile);
-        break;
+        return;
+      }
+    }
+
+    // 2. In Global View: clicking on Earth allows selecting a regional sub-domain
+    if (this.currentCameraMode === "global" && this.earthMesh) {
+      const earthHits = this.raycaster.intersectObject(this.earthMesh);
+      if (earthHits.length > 0) {
+        const hitPt = earthHits[0].point;
+        const geo = this.globePointToLatLon(hitPt);
+
+        // If clicked in/near Northern Indian Ocean / Bay of Bengal basin
+        if (geo.lat >= 5 && geo.lat <= 25 && geo.lon >= 75 && geo.lon <= 98) {
+          const halfLat = 4.5;
+          const halfLon = 5.5;
+          const newBounds = {
+            minLat: Math.max(7.0, parseFloat((geo.lat - halfLat).toFixed(1))),
+            maxLat: Math.min(23.0, parseFloat((geo.lat + halfLat).toFixed(1))),
+            minLon: Math.max(79.0, parseFloat((geo.lon - halfLon).toFixed(1))),
+            maxLon: Math.min(96.0, parseFloat((geo.lon + halfLon).toFixed(1)))
+          };
+          this.setRegionBounds(newBounds);
+        }
       }
     }
   }
@@ -1128,28 +1408,19 @@ export class OceanViewer {
   // 10. STATE UPDATES FROM CONTROL PANEL
   // =========================================================================
   updateState({ variable, depth, timeIndex, showModelRaster, showStreamlines, showArgoMarkers, showBathymetry, rasterOpacity }) {
-    let needsColorUpdate = false;
-
     if (variable !== undefined && variable !== this.variable) {
       this.variable = variable;
-      needsColorUpdate = true;
     }
     if (depth !== undefined && depth !== this.depth) {
       this.depth = depth;
       this.updateDepthSlicePosition();
-      needsColorUpdate = true;
     }
     if (timeIndex !== undefined && timeIndex !== this.timeIndex) {
       this.timeIndex = timeIndex;
-      needsColorUpdate = true;
-    }
-    if (showModelRaster !== undefined) {
-      this.showModelRaster = showModelRaster;
-      if (this.volumePoints) this.volumePoints.visible = showModelRaster;
     }
     if (showStreamlines !== undefined) {
       this.showStreamlines = showStreamlines;
-      if (this.flowMesh) this.flowMesh.visible = showStreamlines;
+      if (this.tracerMesh) this.tracerMesh.visible = showStreamlines;
     }
     if (showArgoMarkers !== undefined) {
       this.showArgoMarkers = showArgoMarkers;
@@ -1160,28 +1431,171 @@ export class OceanViewer {
       this.showBathymetry = showBathymetry;
       if (this.bathymetryMesh) this.bathymetryMesh.visible = showBathymetry;
     }
-    if (rasterOpacity !== undefined && this.volumePoints) {
+    if (rasterOpacity !== undefined && this.tracerMesh) {
       this.rasterOpacity = rasterOpacity;
-      this.volumePoints.material.opacity = rasterOpacity * 0.85;
-    }
-
-    if (needsColorUpdate) {
-      this.updateVolumetricColors();
+      this.tracerMesh.material.opacity = Math.min(0.5, rasterOpacity * 0.3);
     }
   }
 
   // =========================================================================
-  // 11. ANIMATION & RENDER LOOP
+  // 11. SPATIAL TRANSITION STATE MACHINE EXECUTION (P0-1 & P0-2)
+  // =========================================================================
+  updateSpatialTransition(now) {
+    const tr = this.spatialTransition;
+    if (!tr) return;
+
+    // Smooth cubic easing helper
+    const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    if (tr.state === "RETURNING_TO_GLOBAL") {
+      const elapsed = now - tr.startTime;
+      const progress = Math.min(1.0, elapsed / tr.duration);
+      const t = easeInOutCubic(progress);
+
+      this.camera.position.lerpVectors(tr.startCamPos, tr.endCamPos, t);
+      this.controls.target.lerpVectors(tr.startLookAt, tr.endLookAt, t);
+
+      // Fade out depth volume, fade in globe
+      if (this.earthMat) {
+        this.earthMat.opacity = Math.min(1.0, 0.2 + progress * 0.8);
+      }
+      const volScaleY = Math.max(0.001, (1.0 - progress) * 1.0);
+      this.depthGroup.scale.set(1.0, volScaleY, 1.0);
+
+      if (progress >= 1.0) {
+        this.depthGroup.visible = false;
+        this.globeGroup.visible = true;
+        this.transitionState = "IDLE_GLOBAL";
+        this.spatialTransition = null;
+      }
+      return;
+    }
+
+    // Global -> Depth: Multi-Stage Pipeline (Total: ~3.0 seconds)
+    // Stage A: Region Approach (0ms -> 900ms)
+    // Stage B: Surface Descent (900ms -> 1700ms)
+    // Stage C: Volumetric Extrusion & Emergence (1700ms -> 2400ms)
+    // Stage D: Underwater Perspective Framing & Optical Attenuation (2400ms -> 3100ms)
+
+    const elapsed = now - tr.startTime;
+
+    if (elapsed < 900) {
+      // Stage A: High-altitude orbit approach toward selected region
+      this.transitionState = "APPROACHING_REGION";
+      const progress = Math.min(1.0, elapsed / 900);
+      const t = easeInOutCubic(progress);
+
+      this.camera.position.lerpVectors(tr.startCamPos, tr.approachCamPos, t);
+      this.controls.target.lerpVectors(tr.startLookAt, tr.gTarget, t);
+
+      // Globe remains crisp and dominant
+      if (this.earthMat) this.earthMat.opacity = 1.0;
+      this.depthGroup.scale.set(1.0, 0.001, 1.0);
+      if (this.tracerMat) this.tracerMat.opacity = 0.0;
+      if (this.bathymetryMesh) this.bathymetryMesh.material.opacity = 0.0;
+    } else if (elapsed < 1700) {
+      // Stage B: Low-altitude surface approach over selected basin
+      this.transitionState = "SURFACE_APPROACH";
+      const stageElapsed = elapsed - 900;
+      const progress = Math.min(1.0, stageElapsed / 800);
+      const t = easeInOutCubic(progress);
+
+      this.camera.position.lerpVectors(tr.approachCamPos, tr.surfaceCamPos, t);
+      this.controls.target.lerpVectors(tr.gTarget, new THREE.Vector3(0, 0, 0), t);
+
+      // Globe gently yields to ocean surface
+      if (this.earthMat) this.earthMat.opacity = Math.max(0.15, 1.0 - progress * 0.75);
+      if (this.depthSurface) {
+        this.depthSurface.material.opacity = 0.08 + progress * 0.20;
+      }
+      this.depthGroup.scale.set(1.0, 0.02 + progress * 0.15, 1.0);
+    } else if (elapsed < 2400) {
+      // Stage C: Volumetric Extrusion & Component Emergence
+      this.transitionState = "VOLUME_REVEAL";
+      const stageElapsed = elapsed - 1700;
+      const progress = Math.min(1.0, stageElapsed / 700);
+      const t = easeInOutCubic(progress);
+
+      // Cross camera to intermediate oblique altitude
+      const midCam = tr.surfaceCamPos.clone().lerp(tr.finalCamPos, t);
+      const midTarget = new THREE.Vector3(0, 0, 0).lerp(tr.finalTarget, t);
+      this.camera.position.copy(midCam);
+      this.controls.target.copy(midTarget);
+
+      // Extrude depth volume vertically from sea surface down to seabed
+      const extrudedY = 0.17 + t * 0.83; // Scale Y from 0.17 to 1.0
+      this.depthGroup.scale.set(1.0, extrudedY, 1.0);
+
+      // Components fade in as volume reaches full depth
+      if (this.bathymetryMesh) {
+        this.bathymetryMesh.material.opacity = Math.min(1.0, progress * 1.1);
+      }
+      if (this.tracerMat) {
+        // Delicate particles fade in gently to standard 0.25 opacity
+        this.tracerMat.opacity = Math.min(0.25, progress * 0.25);
+      }
+
+      // Hide Earth sphere as volume solidifies
+      if (this.earthMat) this.earthMat.opacity = Math.max(0.0, 0.25 - progress * 0.25);
+      if (progress > 0.85) {
+        this.globeGroup.visible = false;
+      }
+    } else if (elapsed < 3100) {
+      // Stage D: Underwater Perspective Framing & Optical Attenuation
+      this.transitionState = "UNDERWATER_DESCENT";
+      const stageElapsed = elapsed - 2400;
+      const progress = Math.min(1.0, stageElapsed / 700);
+      const t = easeInOutCubic(progress);
+
+      this.camera.position.lerpVectors(this.camera.position, tr.finalCamPos, t * 0.3 + 0.1);
+      this.controls.target.lerpVectors(this.controls.target, tr.finalTarget, t * 0.3 + 0.1);
+
+      this.depthGroup.scale.set(1.0, 1.0, 1.0);
+
+      // Gradually apply underwater optical attenuation (P0-2)
+      if (!this.scene.fog) {
+        this.setUnderwaterOpticalAttenuation(true);
+      }
+
+      if (this.rulerGroup) this.rulerGroup.visible = true;
+      if (this.slicePlane) this.slicePlane.visible = true;
+      if (this.depthSurface) this.depthSurface.material.opacity = 0.28;
+      if (this.tracerMat) this.tracerMat.opacity = 0.25;
+    } else {
+      // Transition Complete: Lock into DEPTH_READY
+      this.transitionState = "DEPTH_READY";
+      this.camera.position.copy(tr.finalCamPos);
+      this.controls.target.copy(tr.finalTarget);
+      this.controls.update();
+
+      this.depthGroup.scale.set(1.0, 1.0, 1.0);
+      this.globeGroup.visible = false;
+      this.setUnderwaterOpticalAttenuation(true);
+
+      if (this.rulerGroup) this.rulerGroup.visible = true;
+      if (this.slicePlane) this.slicePlane.visible = true;
+      if (this.depthSurface) this.depthSurface.material.opacity = 0.28;
+      if (this.tracerMat) this.tracerMat.opacity = 0.25;
+      if (this.bathymetryMesh) this.bathymetryMesh.material.opacity = 1.0;
+
+      this.spatialTransition = null;
+    }
+  }
+
+  // =========================================================================
+  // 12. ANIMATION & RENDER LOOP (60 FPS OPTIMIZED)
   // =========================================================================
   startRenderLoop() {
     const animate = (time) => {
       requestAnimationFrame(animate);
 
-      // 1. Camera Tween Interpolation
-      if (this.cameraTween) {
+      // 1. Multi-Stage Spatial Transition State Machine (P0-1 & P0-2)
+      if (this.spatialTransition) {
+        this.updateSpatialTransition(performance.now());
+      } else if (this.cameraTween) {
+        // Standard Camera Tween Interpolation
         const elapsed = performance.now() - this.cameraTween.startTime;
         const progress = Math.min(1.0, elapsed / this.cameraTween.duration);
-        // Cubic ease in-out
         const t = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2;
 
         this.camera.position.lerpVectors(this.cameraTween.startPos, this.cameraTween.endPos, t);
@@ -1194,17 +1608,20 @@ export class OceanViewer {
 
       this.controls.update();
 
-      // 2. Slow subtle earth rotation when idle in Global Basin mode
-      if (this.currentCameraMode === "global" && this.earthMesh && !this.controls.state) {
-        // Subtle atmospheric breathing pulse
+      // 2. Global Mode Atmospheric Breathing Pulse
+      if (this.currentCameraMode === "global") {
         if (this.atmosMesh) {
           this.atmosMesh.scale.setScalar(1.0 + Math.sin(time * 0.002) * 0.008);
         }
       }
 
-      // 3. 3D Current Velocity Streamline Update
-      if (this.currentCameraMode === "depth" && this.showStreamlines) {
-        this.updateVelocityParticles();
+      // 3. Depth Mode Animations: Procedural Ocean Waves + Subtle Water Tracers
+      if (this.currentCameraMode === "depth") {
+        this.updateOceanSurfaceWaves(time);
+
+        if (this.showStreamlines) {
+          this.updateTracerParticles();
+        }
       }
 
       // 4. Update Assimilation 3D Shockwave
@@ -1212,7 +1629,7 @@ export class OceanViewer {
         const p = this.assimilationPulse;
         p.radius += 0.85;
         const scale = p.radius;
-        p.mesh.scale.set(scale, scale * 0.45, scale); // Ellipsoidal covariance spread
+        p.mesh.scale.set(scale, scale * 0.45, scale);
         p.mesh.material.opacity = Math.max(0, 1.0 - p.radius / p.maxRadius);
 
         if (p.radius >= p.maxRadius) {
@@ -1221,12 +1638,11 @@ export class OceanViewer {
         }
       }
 
-      // 5. Pulsing rings animation
+      // 5. Pulsing rings animation on selected Argo float
       this.argo3DObjects.forEach((item, idx) => {
         const phase = time * 0.004 + idx * 0.5;
         const scale = 1.0 + Math.sin(phase) * 0.25;
 
-        // Depth select ring
         const dRing = item.depthObj.getObjectByName("depthSelectRing");
         if (dRing && item.id === this.selectedArgoId) {
           dRing.scale.setScalar(scale);
