@@ -108,6 +108,18 @@
           </div>
         </div>
 
+        <!-- REGION SELECTION & DEPTH VIEW ENTRY HUD -->
+        <div class="region-selection-hud" id="region-selection-hud">
+          <div class="region-hud-meta">
+            <span class="region-hud-tag">ANALYSIS EXTENT</span>
+            <span class="region-hud-coords" id="region-hud-coords">7.5°–22.5°N, 79.5°–95.5°E</span>
+          </div>
+          <button class="region-hud-enter-btn" id="btn-enter-depth-hud" title="Enter Depth View centered on this geographic volume">
+            <span>Enter Depth View</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m19 12-7 7-7-7"/><path d="M12 19V5"/></svg>
+          </button>
+        </div>
+
         <!-- SCIENTIFIC COLORBAR LEGEND -->
         <div class="ocean-legend-card" id="legend-card">
           <div class="legend-header">
@@ -160,7 +172,14 @@
       <div class="modal-dialog">
         <div class="modal-header">
           <div class="modal-title-wrap">
-            <div class="modal-icon-cyclone">🌀</div>
+            <div class="modal-icon-cyclone">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" stroke-dasharray="4 4"/>
+                <path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10S2 17.52 2 12"/>
+                <path d="M12 6a6 6 0 0 1 6 6c0 3.31-2.69 6-6 6s-6-2.69-6-6"/>
+                <circle cx="12" cy="12" r="2" fill="currentColor"/>
+              </svg>
+            </div>
             <div>
               <div class="modal-title">Cyclone 3D Atmosphere-Ocean Coupling</div>
               <div class="modal-subtitle">Planned Module: Tropical Cyclone Wind Stress & Cold Wake Assimilation</div>
@@ -170,7 +189,13 @@
         </div>
         <div class="modal-body">
           <div class="modal-alert-box">
-            <div class="modal-alert-icon">ℹ️</div>
+            <div class="modal-alert-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+            </div>
             <div>
               <strong>Scientific Module Status:</strong>
               <div>Coupled Atmospheric-Oceanic Cyclone Boundary Layer & Storm Surge 3D Track Assimilation module is scheduled for the next deployment phase.</div>

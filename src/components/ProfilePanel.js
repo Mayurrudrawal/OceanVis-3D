@@ -103,7 +103,7 @@ export class ProfilePanel {
         </div>
 
         <button class="btn-enoi-action" id="btn-run-enoi">
-          <span>⚡</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           <span id="btn-enoi-text">Run Localized EnOI Assimilation</span>
         </button>
 
@@ -145,11 +145,11 @@ export class ProfilePanel {
           <!-- BEFORE / AFTER TOGGLE -->
           <div class="comp-actions-row">
             <button class="btn-secondary active" id="btn-toggle-viewmode" style="border-color: rgba(16, 185, 129, 0.4); color: #34d399;">
-              <span>👁️</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
               <span id="btn-toggle-viewmode-text">Showing: Post-EnOI Analysis</span>
             </button>
             <button class="btn-secondary" id="btn-reset-enoi" title="Reset this float's assimilation state">
-              <span>🔄</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
               <span>Reset Experiment</span>
             </button>
           </div>
@@ -220,8 +220,8 @@ export class ProfilePanel {
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: "rgba(13, 20, 36, 0.95)",
-            borderColor: "rgba(56, 189, 248, 0.4)",
+            backgroundColor: "#0f172a",
+            borderColor: "#38bdf8",
             borderWidth: 1,
             titleFont: { family: "'JetBrains Mono', monospace", size: 12 },
             bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
@@ -238,12 +238,12 @@ export class ProfilePanel {
             title: {
               display: true,
               text: "Depth (m)",
-              color: "#94a3b8",
-              font: { family: "'Inter', sans-serif", size: 11 }
+              color: "#334155",
+              font: { family: "'Inter', sans-serif", size: 11, weight: 600 }
             },
-            grid: { color: "rgba(255, 255, 255, 0.06)" },
+            grid: { color: "#e2e8f0" },
             ticks: {
-              color: "#64748b",
+              color: "#475569",
               font: { family: "'JetBrains Mono', monospace", size: 10 }
             }
           },
@@ -251,12 +251,12 @@ export class ProfilePanel {
             title: {
               display: true,
               text: `${varConfig.name} (${varConfig.unit})`,
-              color: "#94a3b8",
-              font: { family: "'Inter', sans-serif", size: 11 }
+              color: "#334155",
+              font: { family: "'Inter', sans-serif", size: 11, weight: 600 }
             },
-            grid: { color: "rgba(255, 255, 255, 0.06)" },
+            grid: { color: "#e2e8f0" },
             ticks: {
-              color: "#64748b",
+              color: "#475569",
               font: { family: "'JetBrains Mono', monospace", size: 10 }
             }
           }

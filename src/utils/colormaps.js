@@ -61,3 +61,29 @@ export function getLegendGradient(paletteName = "turbo") {
   const parts = stops.map(s => `rgb(${s.r}, ${s.g}, ${s.b}) ${(s.pos * 100).toFixed(0)}%`);
   return `linear-gradient(to right, ${parts.join(", ")})`;
 }
+
+/**
+ * Zero-allocation direct buffer write for particle colors in 60 FPS animation loops
+ */
+export function sampleColormapDirect(t, paletteName, targetArray, offset) {
+  const stops = COLORMAPS[paletteName] || COLORMAPS.turbo;
+  const clamped = Math.max(0, Math.min(1, t));
+
+  for (let i = 0; i < stops.length - 1; i++) {
+    const s1 = stops[i];
+    const s2 = stops[i + 1];
+    if (clamped >= s1.pos && clamped <= s2.pos) {
+      const f = (clamped - s1.pos) / (s2.pos - s1.pos);
+      targetArray[offset] = (s1.r + f * (s2.r - s1.r)) / 255.0;
+      targetArray[offset + 1] = (s1.g + f * (s2.g - s1.g)) / 255.0;
+      targetArray[offset + 2] = (s1.b + f * (s2.b - s1.b)) / 255.0;
+      return;
+    }
+  }
+
+  const last = stops[stops.length - 1];
+  targetArray[offset] = last.r / 255.0;
+  targetArray[offset + 1] = last.g / 255.0;
+  targetArray[offset + 2] = last.b / 255.0;
+}
+

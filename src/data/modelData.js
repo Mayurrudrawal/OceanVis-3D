@@ -198,6 +198,34 @@ export function getModelScalar(lat, lon, depth, variable, timeIndex = 2) {
 }
 
 /**
+
+ * Continuous 3D field samplers for particle advection and scalar sampling
+ */
+export function sampleTemperature(lat, lon, depth, timeIndex = 2) {
+  return getModelScalar(lat, lon, depth, "temperature", timeIndex);
+}
+
+export function sampleSalinity(lat, lon, depth, timeIndex = 2) {
+  return getModelScalar(lat, lon, depth, "salinity", timeIndex);
+}
+
+export function sampleCurrent(lat, lon, depth, timeIndex = 2) {
+  const speed = getModelScalar(lat, lon, depth, "velocity", timeIndex);
+  // Analytical flow field components (u: zonal, v: meridional, w: vertical)
+  const timePhase = timeIndex * 0.15;
+  const radLat = (lat * Math.PI) / 180;
+  const radLon = (lon * Math.PI) / 180;
+  
+  // Coastal jet and gyre circulation
+  const u = speed * (Math.sin(radLat * 4 + timePhase) * 0.6 + 0.4);
+  const v = speed * (Math.cos(radLon * 3 + timePhase) * 0.5 + 0.5);
+  // Vertical velocity (w) in mm/s or slight upwelling/downwelling
+  const w = Math.sin(radLat * 6 + radLon * 6) * 0.012;
+
+  return { u, v, w, speed };
+}
+
+/**
  * Returns a complete vertical profile from surface to 2000m at a specified location
  */
 export function getModelProfile(lat, lon, variable = "temperature", timeIndex = 2) {
@@ -208,3 +236,5 @@ export function getModelProfile(lat, lon, variable = "temperature", timeIndex = 
     };
   });
 }
+
+

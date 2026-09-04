@@ -48,6 +48,17 @@ class OceanVisApp {
             <div style="color: #94a3b8; font-size: 0.68rem;">Depth: ${data.depth}m | Bathy: ${data.bathymetry}m</div>
           `;
         }
+      },
+      onRegionSelected: (bounds) => {
+        const coordsEl = document.getElementById("region-hud-coords");
+        if (coordsEl) {
+          coordsEl.textContent = `${bounds.minLat.toFixed(1)}°–${bounds.maxLat.toFixed(1)}°N, ${bounds.minLon.toFixed(1)}°–${bounds.maxLon.toFixed(1)}°E`;
+        }
+        this.showToast(`Selected Extent: ${bounds.minLat.toFixed(1)}°-${bounds.maxLat.toFixed(1)}°N, ${bounds.minLon.toFixed(1)}°-${bounds.maxLon.toFixed(1)}°E`);
+      },
+      onEnterDepthRequested: (bounds) => {
+        this.updateCameraSwitcherUI("depth");
+        this.showToast("Entering Depth 3D View with selected geographic extent.");
       }
     });
 
@@ -93,6 +104,14 @@ class OceanVisApp {
         this.updateCameraSwitcherUI("global");
         this.showToast("Camera reset to Bay of Bengal basin.");
       },
+      onRegionBoundsChange: (bounds) => {
+        this.viewer.setRegionBounds(bounds);
+        const coordsEl = document.getElementById("region-hud-coords");
+        if (coordsEl) {
+          coordsEl.textContent = `${bounds.minLat.toFixed(1)}°–${bounds.maxLat.toFixed(1)}°N, ${bounds.minLon.toFixed(1)}°–${bounds.maxLon.toFixed(1)}°E`;
+        }
+        this.showToast(`Domain Bounds: ${bounds.minLat.toFixed(1)}°-${bounds.maxLat.toFixed(1)}°N, ${bounds.minLon.toFixed(1)}°-${bounds.maxLon.toFixed(1)}°E`);
+      },
       onToggle3D: () => {
         const is3d = this.viewer.toggle3D();
         this.updateCameraSwitcherUI(is3d ? "depth" : "global");
@@ -128,6 +147,7 @@ class OceanVisApp {
   bindCameraSwitcher() {
     const btnGlobal = document.getElementById("btn-cam-global");
     const btnDepth = document.getElementById("btn-cam-depth");
+    const btnEnterDepthHud = document.getElementById("btn-enter-depth-hud");
 
     btnGlobal?.addEventListener("click", () => {
       this.updateCameraSwitcherUI("global");
@@ -139,6 +159,11 @@ class OceanVisApp {
       this.updateCameraSwitcherUI("depth");
       this.viewer.setCameraMode("depth");
       this.showToast("Camera Mode 2: Depth 3D Vertical Structure");
+    });
+
+    btnEnterDepthHud?.addEventListener("click", () => {
+      this.viewer.enterDepthViewWithBounds(this.viewer.activeBounds);
+      this.updateCameraSwitcherUI("depth");
     });
 
     // Depth View Direction Switcher (Requirement 6)
@@ -159,15 +184,21 @@ class OceanVisApp {
     const btnGlobal = document.getElementById("btn-cam-global");
     const btnDepth = document.getElementById("btn-cam-depth");
     const dirSwitcher = document.getElementById("depth-view-switcher");
+    const hudEnterBtn = document.getElementById("btn-enter-depth-hud");
+    const hudTag = document.querySelector(".region-hud-tag");
 
     if (mode === "depth") {
       btnDepth?.classList.add("active");
       btnGlobal?.classList.remove("active");
       if (dirSwitcher) dirSwitcher.style.display = "flex";
+      if (hudEnterBtn) hudEnterBtn.style.display = "none";
+      if (hudTag) hudTag.textContent = "DEPTH 3D EXTENT";
     } else {
       btnGlobal?.classList.add("active");
       btnDepth?.classList.remove("active");
       if (dirSwitcher) dirSwitcher.style.display = "none";
+      if (hudEnterBtn) hudEnterBtn.style.display = "flex";
+      if (hudTag) hudTag.textContent = "ANALYSIS EXTENT";
     }
   }
 
